@@ -1,0 +1,1467 @@
+#!/bin/bash
+
+#Following copyright is for the xyz2tb.py script which is used in our program
+#Copyright (c) 2021, Sebastian Dechert
+#All rights reserved.
+
+#this script uses xyz2tb.py which need a Python virtual environment
+#to install the libraries that are not currently in use in BEOCAT
+#we use 3.11.2-GCCcore-12.2.0-bare Python version
+#if you need to change the Python version use, 'module avail Python/'
+#need to have the same Python version in your virtual environment
+
+#create a Python virtual environment
+
+echo "Do you currenly have a Python virtual environment [y] or [n]?"
+read yesorno
+
+if [[ $yesorno =~ "n" ]]
+then
+
+module load Python/3.11.2-GCCcore-12.2.0-bare
+python3 -m venv ~/PyVEn
+source ~/PyVEn/bin/activate
+
+pip install pandas --upgrade
+pip install scipy --upgrade
+pip install tabulate --upgrade
+pip install matplotlib --upgrade
+pip install scikit-learn --upgrade
+
+elif [[ $yesorno =~ "y" ]]
+then
+
+module load Python/3.11.2-GCCcore-12.2.0-bare
+source ~/PyVEn/bin/activate
+
+fi
+
+#to deactivate the Python virtual environment use deactivate
+
+#request the input file name
+echo ""
+echo "What is the name of the file?"
+read file_name
+#file_name=au44
+
+#request the name of the molecule
+echo ""
+echo "What is the name of the molecule?"
+read mol_name
+#mol_name=Au44
+
+#request the atom interested in finding the coordination number
+echo ""
+echo "What is the atom interested in finding the coordination number?"
+read coord_atom
+read -p "With which atom: " coord_atom_two
+#read coord_atom_two
+#coord_atom=Au
+#coord_atom_two=Au
+
+
+#requirement of dihedral angle information
+
+echo ""
+echo "Do you need dihedral angle information [y] or [n]"
+read dyesorno
+
+#request the atoms for the dihedral angle
+
+if [[ $dyesorno =~ "y" ]]
+then
+echo ""
+
+#request the type of dihedral angle
+
+echo "Type of the dihedral angle"
+echo ""
+echo "Type 1: Atom1-Atom2-Atom3-Atom4"
+echo "Type 2: Atom1-Atom2-[...]-Atom2-Atom1"
+read -p "[1] or [2]: " oneortwo
+echo ""
+
+ if [[ $((oneortwo)) -eq 1  ]]
+  then
+  echo "What are the atoms you are interested in?"
+  read -p "Atom 1: " datomone
+  read -p "Atom 2: " datomtwo
+  read -p "Atom 3: " datomthree
+  read -p "Atom 4: " datomfour
+  elif [[ $((oneortwo)) -eq 2  ]]
+  then
+  echo "What are the atoms you are interested in?"
+  read -p "Atom 1: " datomone
+  read -p "Atom 2: " datomtwo
+  read -p "Atom [...]: " datomthree
+  datomfour=$datomtwo
+ fi
+fi
+
+#requirement of the zeroth step
+echo ""
+echo "Omit zeroth step information [y] or [n]?"
+read zstep
+
+###
+### things to change starts here ###
+
+#change the covalent radii. The default covalent radii is 8%
+cov_radii=30.00
+
+#number of steps between two adjacent steps
+adjstep=10
+
+#change the log.lammps potential energy step jump
+jump=100
+
+#time unit
+tunit=ps
+
+#one step is euql to ( 1 step = xxxxx tunit), then step conversion is >>> 1 step * xxxxx tunit
+onestepeq=0.00100
+timescale=2
+timewidth=$(echo "1*$adjstep*$jump*$onestepeq*0.80" | bc)
+
+### things to change ends here ###
+###
+
+owd=$PWD
+
+cp $owd/$file_name $owd/$file_name-cp
+
+if [[ $zstep =~ "y" ]]
+then
+  line_one="$(grep "" $owd/$file_name-cp | head -1)"
+  sed -i 1,$((line_one+2))d $owd/$file_name-cp
+fi
+
+mkdir $mol_name-resFLARE
+mv $owd/$file_name-cp $mol_name-resFLARE
+cd $mol_name-resFLARE
+
+cwd=$PWD
+loops=1
+nbonds=0
+bond_types=0
+atom_types=0
+atoms_no=0
+coordnumb_line=0
+calctype=MD
+colorpalone=("#ea5545" "#f46a9b" "#ef9b20" "#ede15b" "#87bc45" "#27aeef" "#b33dc6")
+colorpaltwo=("#ea5545" "#ef9b20" "#ede15b" "#87bc45" "#b33dc6")
+colorpalthree=("#1984c5" "#22a7f0" "#63bff0" "#a7d5ed" "#e2e2e2" "#e1a692" "#de6e56" "#e14b31" "#c23728" "#991f17" "#b04238" "#c86558" "#a4a2a8" "#b3bfd1" "#bfcbdb" "#d7e1ee")
+
+for (( counter=1; counter<=loops; counter++ ));
+do
+  line_one="$(grep "" $cwd/$file_name-cp | head -1)"
+
+  mkdir $counter-[$mol_name]
+  cd $counter-[$mol_name]
+  nwd=$PWD
+
+  grep -A $((line_one+2)) "" $cwd/$file_name-cp | head -$((line_one+2)) > $nwd/$mol_name-$counter.xyz
+  sed "1,$((line_one+2))d" $cwd/$file_name-cp > $cwd/$file_name-cp-temp
+  rm $cwd/$file_name-cp
+  mv $cwd/$file_name-cp-temp $cwd/$file_name-cp
+
+  #Copyright (c) 2021, Sebastian Dechert
+  #following Python script is created by Sebastian Dechert.
+  #https://github.com/radi0sus/xyz2tab.git
+  #in our calculations we are increasing the covalent radii by 14.85%.
+  #default covalent radii is increased by 8%.
+
+  python3 $owd/xyz2tab.py $nwd/$mol_name-$counter.xyz -r $cov_radii > $nwd/resFLARE-$mol_name-$counter.txt
+
+  #extract min. bond length, max. bond length, mean bond length, pop. std. dev., and std. error
+
+  lengths_line="$(grep -n "lengths" $nwd/resFLARE-$mol_name-$counter.txt | head -1 | cut -f1 -d:)"
+  mean_line="$(grep -n "Mean" $nwd/resFLARE-$mol_name-$counter.txt | head -1 | cut -f1 -d:)"
+  bonds=$((mean_line-lengths_line))
+  grep -A $((bonds-1)) "lengths" $nwd/resFLARE-$mol_name-$counter.txt | head -$((bonds-1)) > $nwd/bond-lengths.txt
+  sed -i '1d' $nwd/bond-lengths.txt
+  sed -i '1d' $nwd/bond-lengths.txt
+
+  awk '{print $2","$4","$6 | "sort -k 2 -t, -n"}' $nwd/bond-lengths.txt > $nwd/bond-lengths-sorted.txt
+  rm $nwd/bond-lengths.txt
+
+  nbonds=$((bonds-3))
+  if [[ $counter -eq 1 ]]
+  then
+    printf "No." >> $cwd/bondINFO-resFLARE.csv
+    bond_types=($(awk -F',' '{print $1}' $nwd/bond-lengths-sorted.txt))
+  fi
+
+  grep -A $((bonds-1)) "Mean" $nwd/resFLARE-$mol_name-$counter.txt | head -$((bonds-1)) > $nwd/bond-means.txt
+  sed -i '1d' $nwd/bond-means.txt
+  sed -i '1d' $nwd/bond-means.txt
+
+  awk '{print $6","$12","$14 | "sort -k 1 -t, -n"}' $nwd/bond-means.txt > $nwd/bond-means-sorted.txt
+  rm $nwd/bond-means.txt
+
+  for (( i=1; i<=$((nbonds)); i++ ));
+  do
+    if [[ $counter -eq 1 ]]
+    then
+      printf ",Bond type,Min. bond length (Å),Max. bond length (Å),Mean bond length (Å),Pop. std. dev.,Std. error" >> $cwd/bondINFO-resFLARE.csv
+    fi
+    sorted_lengths="$(grep -A 1 "" $nwd/bond-lengths-sorted.txt | head -1)"
+    sorted_means="$(grep -A 1 "" $nwd/bond-means-sorted.txt | head -1)"
+    sed -i '1d' $nwd/bond-lengths-sorted.txt
+    sed -i '1d' $nwd/bond-means-sorted.txt
+    if [[ $i -eq 1 ]]
+    then
+    printf $counter","$sorted_lengths >> $nwd/temp-bondINFO
+    else
+    printf $sorted_lengths >> $nwd/temp-bondINFO
+    fi
+    printf ","$sorted_means"," >> $nwd/temp-bondINFO
+  done
+
+  rm $nwd/bond-lengths-sorted.txt
+  rm $nwd/bond-means-sorted.txt
+
+  sorted_info="$(grep "" $nwd/temp-bondINFO)"
+
+  if [[ $counter -eq 1 ]]
+  then
+    printf "\n" >> $cwd/bondINFO-resFLARE.csv
+  fi
+  
+  printf $sorted_info >> $cwd/bondINFO-resFLARE.csv
+  printf "\n" >> $cwd/bondINFO-resFLARE.csv
+
+  rm $nwd/temp-bondINFO
+
+  if [[ $dyesorno =~ "y" ]]
+  then
+  #extract dihedral angle information
+
+  anglestart="$(grep -n "Angle" $nwd/resFLARE-$mol_name-$counter.txt | head -1 | cut -f1 -d:)"
+  angleend="$(grep -n -m2 "Angle" $nwd/resFLARE-$mol_name-$counter.txt | tail -n1 | cut -f1 -d:)"
+  tot_angles=$((angleend-anglestart))
+  grep -A $((tot_angles-1)) "Angle" $nwd/resFLARE-$mol_name-$counter.txt | head -$((tot_angles-1)) > $nwd/tot_angle.txt
+  sed -i '1d' $nwd/tot_angle.txt
+  sed -i '1d' $nwd/tot_angle.txt
+
+  if [[ $datomone =~ $datomthree ]]
+  then
+    grep "$datomone.*–$datomtwo.*–$datomthree.*" $nwd/tot_angle.txt > $nwd/$datomone-$datomtwo-$datomthree
+    awk '{print $2}' $nwd/$datomone-$datomtwo-$datomthree > $nwd/$datomone-$datomtwo-$datomthree-temp
+    awk -F"–" '{print $1"–"$2"–"$3}' $nwd/$datomone-$datomtwo-$datomthree-temp > $nwd/$datomone-$datomtwo-$datomthree-org
+    rm $nwd/$datomone-$datomtwo-$datomthree
+    rm $nwd/$datomone-$datomtwo-$datomthree-temp
+    awk -F"–" '{print $1"–"$2"–"$3" "$1" "$2" "$3}' $nwd/$datomone-$datomtwo-$datomthree-org > $nwd/$datomone-$datomtwo-$datomthree-org-info
+    rm $nwd/$datomone-$datomtwo-$datomthree-org
+  else
+    grep "$datomone.*–$datomtwo.*–$datomthree.*" $nwd/tot_angle.txt > $nwd/$datomone-$datomtwo-$datomthree
+    awk '{print $2}' $nwd/$datomone-$datomtwo-$datomthree > $nwd/$datomone-$datomtwo-$datomthree-temp
+    awk -F"–" '{print $1"–"$2"–"$3}' $nwd/$datomone-$datomtwo-$datomthree-temp > $nwd/$datomone-$datomtwo-$datomthree-org
+    grep "$datomthree.*–$datomtwo.*–$datomone.*" $nwd/tot_angle.txt > $nwd/$datomthree-$datomtwo-$datomone
+    awk '{print $2}' $nwd/$datomthree-$datomtwo-$datomone > $nwd/$datomthree-$datomtwo-$datomone-temp
+    awk -F"–" '{print $3"–"$2"–"$1}' $nwd/$datomthree-$datomtwo-$datomone-temp >> $nwd/$datomone-$datomtwo-$datomthree-org
+    rm $nwd/$datomone-$datomtwo-$datomthree
+    rm $nwd/$datomthree-$datomtwo-$datomone
+    rm $nwd/$datomthree-$datomtwo-$datomone-temp
+    rm $nwd/$datomone-$datomtwo-$datomthree-temp
+    awk -F"–" '{print $1"–"$2"–"$3" "$1" "$2" "$3}' $nwd/$datomone-$datomtwo-$datomthree-org > $nwd/$datomone-$datomtwo-$datomthree-org-info
+    if [[ $((oneortwo)) -eq 2  ]]
+    then
+    awk -F"–" '{print $3"–"$2"–"$1" "$3" "$2" "$1}' $nwd/$datomone-$datomtwo-$datomthree-org > $nwd/$datomthree-$datomtwo-$datomone-org-info
+    fi
+    awk -F"–" '{print $3}' $nwd/$datomone-$datomtwo-$datomthree-org > $nwd/$datomthree-info
+    rm $nwd/$datomone-$datomtwo-$datomthree-org
+  fi
+
+  if [[ $((oneortwo)) -eq 1  ]]
+  then
+  if [[ $datomtwo =~ $datomfour ]]
+  then
+    grep "$datomtwo.*–$datomthree.*–$datomfour.*" $nwd/tot_angle.txt > $nwd/$datomtwo-$datomthree-$datomfour
+    awk '{print $2}' $nwd/$datomtwo-$datomthree-$datomfour > $nwd/$datomtwo-$datomthree-$datomfour-temp
+    awk -F"–" '{print $1"–"$2"–"$3}' $nwd/$datomtwo-$datomthree-$datomfour-temp > $nwd/$datomtwo-$datomthree-$datomfour-org
+    rm $nwd/$datomtwo-$datomthree-$datomfour
+    rm $nwd/$datomtwo-$datomthree-$datomfour-temp
+    awk -F"–" '{print $1"–"$2"–"$3" "$1" "$2" "$3}' $nwd/$datomtwo-$datomthree-$datomfour-org > $nwd/$datomtwo-$datomthree-$datomfour-org-info
+    rm $nwd/$datomtwo-$datomthree-$datomfour-org
+  else
+    grep "$datomtwo.*–$datomthree.*–$datomfour.*" $nwd/tot_angle.txt > $nwd/$datomtwo-$datomthree-$datomfour
+    awk '{print $2}' $nwd/$datomtwo-$datomthree-$datomfour > $nwd/$datomtwo-$datomthree-$datomfour-temp
+    awk -F"–" '{print $1"–"$2"–"$3}' $nwd/$datomtwo-$datomthree-$datomfour-temp > $nwd/$datomtwo-$datomthree-$datomfour-org
+    grep "$datomfour.*–$datomthree.*–$datomtwo.*" $nwd/tot_angle.txt > $nwd/$datomfour-$datomthree-$datomtwo
+    awk '{print $2}' $nwd/$datomfour-$datomthree-$datomtwo > $nwd/$datomfour-$datomthree-$datomtwo-temp
+    awk -F"–" '{print $1"–"$2"–"$3}' $nwd/$datomfour-$datomthree-$datomtwo-temp >> $nwd/$datomtwo-$datomthree-$datomfour-org
+    rm $nwd/$datomtwo-$datomthree-$datomfour
+    rm $nwd/$datomtwo-$datomthree-$datomfour-temp
+    rm $nwd/$datomfour-$datomthree-$datomtwo
+    rm $nwd/$datomfour-$datomthree-$datomtwo-temp
+    awk -F"–" '{print $1"–"$2"–"$3" "$1" "$2" "$3}' $nwd/$datomtwo-$datomthree-$datomfour-org > $nwd/$datomtwo-$datomthree-$datomfour-org-info
+    rm $nwd/$datomtwo-$datomthree-$datomfour-org
+  fi
+  fi
+  linesthree="$(grep -c "" $nwd/$datomthree-info)"
+
+  for (( t=1; t<=$((linesthree)); t++ ));
+  do
+    threelineone="$(grep -m1 "" $nwd/$datomthree-info)"
+    orginfolineone="$(grep -m1 "" $nwd/$datomone-$datomtwo-$datomthree-org-info)"
+    if [[ $((oneortwo)) -eq 1  ]]
+    then
+    grep -w $threelineone $nwd/$datomtwo-$datomthree-$datomfour-org-info > $nwd/temp-dihedral
+    elif [[ $((oneortwo)) -eq 2  ]]
+    then
+    grep -w $threelineone $nwd/$datomthree-$datomtwo-$datomone-org-info > $nwd/temp-dihedral
+    fi
+    templinecount="$(grep -c "" $nwd/temp-dihedral)"
+    if [[ $((templinecount)) -gt 0 ]]
+    then
+    for (( u=1; u<=$((templinecount)); u++ ));
+    do
+      templineone="$(grep -m1 "" $nwd/temp-dihedral)"
+      echo "$orginfolineone"" ""$templineone" >> $nwd/dihedral-sum-info
+      sed -i '1d' $nwd/temp-dihedral
+    done
+    fi
+    sed -i '1d' $nwd/$datomthree-info
+    sed -i '1d' $nwd/$datomone-$datomtwo-$datomthree-org-info
+  done
+
+  rm $nwd/temp-dihedral
+  rm $nwd/$datomthree-info
+  rm $nwd/$datomone-$datomtwo-$datomthree-org-info
+  if [[ $((oneortwo)) -eq 1  ]]
+  then
+  rm $nwd/$datomtwo-$datomthree-$datomfour-org-info
+  elif [[ $((oneortwo)) -eq 2  ]]
+  then
+  rm $nwd/$datomthree-$datomtwo-$datomone-org-info
+  fi
+
+  awk '{print $2"  "$3"  "$4"  "$6"  "$7"  "$8}' $nwd/dihedral-sum-info > $nwd/dihedral-info-testing
+  awk '{ n=split($0,a,FS); $0=""; j=1; delete u; for (i=1; i<=n; i++) if (!u[a[i]]++) $(j++) = a[i]; print }' $nwd/dihedral-info-testing > $nwd/total-dihedral-info
+  rm $nwd/dihedral-sum-info
+  rm $nwd/dihedral-info-testing
+
+  if [[ $((oneortwo)) -eq 2  ]]
+  then
+   awk -F ' ' 'NF==5' $nwd/total-dihedral-info > $nwd/total-dihedral-info-temp
+   rm $nwd/total-dihedral-info
+   awk '{print $1" "$2" "$4" "$5}' $nwd/total-dihedral-info-temp > $nwd/total-dihedral-info
+   rm $nwd/total-dihedral-info-temp
+  fi
+
+  num_tdihedral="$(grep -c "" $nwd/total-dihedral-info)"
+
+  for (( z=1; z<=$((num_tdihedral)); z++ ));
+  do
+    tdihedralline="$(grep -m1 "" $nwd/total-dihedral-info)"
+    python3 $owd/xyz2tab.py $nwd/$mol_name-$counter.xyz -r $cov_radii -d $tdihedralline > $nwd/$z-dihedral-data
+    grep "" $nwd/$z-dihedral-data | tail -1 >> $nwd/dihedral-INFO
+    rm $nwd/$z-dihedral-data
+    sed -i '1d' $nwd/total-dihedral-info
+  done
+
+  rm $nwd/total-dihedral-info
+
+  awk '{print $3 $4}' $nwd/dihedral-INFO > $nwd/dihedral-INFO-temp
+  rm $nwd/dihedral-INFO
+  
+  awk -F":" '{print $1}' $nwd/dihedral-INFO-temp > $nwd/dihedral-INFO-bonds
+  awk -F":" '{print $2}' $nwd/dihedral-INFO-temp > $nwd/dihedral-INFO-angle
+
+  if [[ $((oneortwo)) -eq 2  ]]
+  then
+  awk -F":" '{print $1"  "$2}' $nwd/dihedral-INFO-temp > $nwd/dihedral-INFO-bon-ang
+  awk '!seen[$2]++' $nwd/dihedral-INFO-bon-ang > $nwd/dihedral-INFO-uniq
+  rm $nwd/dihedral-INFO-bon-ang
+  rm $nwd/dihedral-INFO-bonds
+  rm $nwd/dihedral-INFO-angle
+  awk '{print $1}' $nwd/dihedral-INFO-uniq > $nwd/dihedral-INFO-bonds
+  awk '{print $2}' $nwd/dihedral-INFO-uniq > $nwd/dihedral-INFO-angle
+  rm $nwd/dihedral-INFO-uniq
+  num_tdihedral="$(grep -c "" $nwd/dihedral-INFO-bonds)"
+  fi
+  
+  rm $nwd/dihedral-INFO-temp
+
+  printf "\n" >> $nwd/resFLARE-$mol_name-$counter.txt
+  if [[ $((oneortwo)) -eq 1  ]]
+  then
+  printf "Dihedral angle for: $datomone–$datomtwo–$datomthree–$datomfour" >> $nwd/resFLARE-$mol_name-$counter.txt
+  elif [[ $((oneortwo)) -eq 2  ]]
+  then
+  printf "Dihedral angle for: $datomone–$datomtwo–[$datomthree]-$datomfour-$datomone" >> $nwd/resFLARE-$mol_name-$counter.txt
+  fi
+  printf "\n" >> $nwd/resFLARE-$mol_name-$counter.txt
+  printf '|%15s     |' "Atoms" >> $nwd/resFLARE-$mol_name-$counter.txt
+  printf '%15s |' "Dihedral angle /°" >> $nwd/resFLARE-$mol_name-$counter.txt
+  printf "\n" >> $nwd/resFLARE-$mol_name-$counter.txt
+  printf "|--------------------|------------------|" >> $nwd/resFLARE-$mol_name-$counter.txt
+  printf "\n" >> $nwd/resFLARE-$mol_name-$counter.txt
+
+  bondcount20=0
+  bondcount40=0
+  bondcount60=0
+  bondcount80=0
+  bondcount100=0
+  bondcount120=0
+  bondcount140=0
+  bondcount160=0
+  bondcount180=0
+
+  if [[ $counter -eq 1 ]]
+  then
+    echo "No.,0°-20°,20°-40°,40°-60°,60°-80°,80°-100°,100°-120°,120°-140°,140°-160°,160°-180°" >> $cwd/dihedralINFO-resFLARE.csv
+  fi
+
+  for (( a=1; a<=$((num_tdihedral)); a++ ));
+  do
+    bondsline="$(grep -m1 "" $nwd/dihedral-INFO-bonds)"
+    anglesline="$(grep -m1 "" $nwd/dihedral-INFO-angle)"
+    suffix="°"
+    anglelinecount=${anglesline%"$suffix"}
+    zero=0.00
+    if (( $(echo "$anglelinecount<$zero" | bc) ))
+    then
+      anglelinecount=$(echo "$anglelinecount*-1.00" |bc)
+    fi
+    if (( $(echo "$anglelinecount<20.00" | bc) ))
+    then
+      bondcount20=$((bondcount20+1))
+    elif (( $(echo "$anglelinecount<40.00" | bc) ))
+    then
+      bondcount40=$((bondcount40+1))
+    elif (( $(echo "$anglelinecount<60.00" | bc) ))
+    then
+      bondcount60=$((bondcount60+1))
+    elif (( $(echo "$anglelinecount<80.00" | bc) ))
+    then
+      bondcount80=$((bondcount80+1))
+    elif (( $(echo "$anglelinecount<100.00" | bc) ))
+    then
+      bondcount100=$((bondcount100+1))
+    elif (( $(echo "$anglelinecount<120.00" | bc) ))
+    then
+      bondcount120=$((bondcount120+1))
+    elif (( $(echo "$anglelinecount<140.00" | bc) ))
+    then
+      bondcount140=$((bondcount140+1))
+    elif (( $(echo "$anglelinecount<160.00" | bc) ))
+    then
+      bondcount160=$((bondcount160+1))
+    elif (( $(echo "$anglelinecount<=180.00" | bc) ))
+    then
+      bondcount180=$((bondcount180+1))
+    fi
+    printf '|%19s |' "$bondsline" >> $nwd/resFLARE-$mol_name-$counter.txt
+    printf '%15s    |' "$anglesline" >> $nwd/resFLARE-$mol_name-$counter.txt
+    printf "\n" >> $nwd/resFLARE-$mol_name-$counter.txt
+    sed -i '1d' $nwd/dihedral-INFO-bonds
+    sed -i '1d' $nwd/dihedral-INFO-angle
+
+    if [[ $a -eq $((num_tdihedral)) ]]
+    then
+      echo "$counter,$bondcount20,$bondcount40,$bondcount60,$bondcount80,$bondcount100,$bondcount120,$bondcount140,$bondcount160,$bondcount180" >> $cwd/dihedralINFO-resFLARE.csv
+      echo "$bondcount20,$bondcount40,$bondcount60,$bondcount80,$bondcount100,$bondcount120,$bondcount140,$bondcount160,$bondcount180" >> $cwd/temp-dihedral-pcaINFO.csv
+    fi
+  done
+
+  rm $nwd/dihedral-INFO-bonds
+  rm $nwd/dihedral-INFO-angle
+  rm $nwd/tot_angle.txt
+
+  fi
+
+  #finding the coordination number
+  len_line="$(grep -n "length" $nwd/resFLARE-$mol_name-$counter.txt | head -1 | cut -f1 -d:)"
+  tot_bonds=$((lengths_line-len_line))
+  grep -A $((tot_bonds-1)) "length" $nwd/resFLARE-$mol_name-$counter.txt | head -$((tot_bonds-1)) > $nwd/tot_bonds.txt
+  sed -i '1d' $nwd/tot_bonds.txt
+  sed -i '1d' $nwd/tot_bonds.txt
+
+  element_line="$(grep -n "Element" $nwd/resFLARE-$mol_name-$counter.txt | head -1 | cut -f1 -d:)"
+  tot_atoms=$((len_line-element_line))
+  grep -A $((tot_atoms-1)) "Element" $nwd/resFLARE-$mol_name-$counter.txt | head -$((tot_atoms-1)) > $nwd/tot_atoms.txt
+  sed -i '1d' $nwd/tot_atoms.txt
+  sed -i '1d' $nwd/tot_atoms.txt
+
+  atom_types=($(awk -F' ' '{print $2}' $nwd/tot_atoms.txt))
+  rm $nwd/tot_atoms.txt
+  atoms_no=${#atom_types[@]}
+
+  for (( c_loop=1; c_loop<=$((nbonds)); c_loop++ ));
+  do
+    loop_bond="${bond_types[$((c_loop-1))]}"
+
+    one="$(cut -d'–' -f1 <<<"$loop_bond")"
+    two="$(cut -d'–' -f2 <<<"$loop_bond")"
+    #read -ra newarr <<< "$lopp_bond"
+
+    grep "$one.*" $nwd/tot_bonds.txt > $nwd/$one-bonds
+
+    awk -F" |–" '{print $2 | "sort | uniq"}' $nwd/$one-bonds >> $nwd/$one-bonds-temp
+    awk -F" |–" '{print $3 | "sort | uniq"}' $nwd/$one-bonds >> $nwd/$one-bonds-temp
+    grep "$one.*" $nwd/$one-bonds-temp | sort -u >  $nwd/$one-bonds-sorted-uniq
+    grep -o -E '[0-9]+' $nwd/$one-bonds-sorted-uniq | sort -n > $nwd/$one-bonds-no
+    awk -v var=$one '{print var$1}' $nwd/$one-bonds-no > $nwd/$one-bonds-SU
+
+    rm $nwd/$one-bonds
+    rm $nwd/$one-bonds-temp
+    rm $nwd/$one-bonds-sorted-uniq
+    rm $nwd/$one-bonds-no
+
+    grep "$one.*$two.*" $nwd/tot_bonds.txt >> $nwd/$one–$two-bonds
+
+    if [[ $one =~ $two ]]
+    then
+      continue
+    else
+      grep "$two.*" $nwd/tot_bonds.txt > $nwd/$two-bonds
+
+      awk -F" |–" '{print $2 | "sort | uniq"}' $nwd/$two-bonds >> $nwd/$two-bonds-temp
+      awk -F" |–" '{print $3 | "sort | uniq"}' $nwd/$two-bonds >> $nwd/$two-bonds-temp
+      grep "$two.*" $nwd/$two-bonds-temp | sort -u >  $nwd/$two-bonds-sorted-uniq
+      grep -o -E '[0-9]+' $nwd/$two-bonds-sorted-uniq | sort -n > $nwd/$two-bonds-no
+      awk -v var=$two '{print var$1}' $nwd/$two-bonds-no > $nwd/$two-bonds-SU
+
+      rm $nwd/$two-bonds
+      rm $nwd/$two-bonds-temp
+      rm $nwd/$two-bonds-sorted-uniq
+      rm $nwd/$two-bonds-no
+
+      grep "$two.*$one.*" $nwd/tot_bonds.txt >> $nwd/$one–$two-bonds
+    fi
+  done
+  rm $nwd/tot_bonds.txt
+
+  for (( k=1; k<=$((atoms_no)); k++ ));
+  do
+    
+    printf "\n" >> $nwd/resFLARE-$mol_name-$counter.txt
+    printf "Coordination numbers for ${atom_types[$((k-1))]}" >> $nwd/resFLARE-$mol_name-$counter.txt
+    printf "\n" >> $nwd/resFLARE-$mol_name-$counter.txt
+    printf '|%8s ' "Atoms" >> $nwd/resFLARE-$mol_name-$counter.txt
+    for (( s=1; s<=$((nbonds)); s++ ));
+    do
+     printf '|%10s  ' "${bond_types[$((s-1))]}" >> $nwd/resFLARE-$mol_name-$counter.txt
+    done
+    printf '|%15s |' "Total coord." >> $nwd/resFLARE-$mol_name-$counter.txt
+    printf "\n" >> $nwd/resFLARE-$mol_name-$counter.txt
+    printf "|---------" >> $nwd/resFLARE-$mol_name-$counter.txt
+    for (( w=1; w<=$((nbonds)); w++  ));
+    do
+      printf "|----------" >> $nwd/resFLARE-$mol_name-$counter.txt
+    done
+    printf "|----------------|" >> $nwd/resFLARE-$mol_name-$counter.txt
+    printf "\n" >> $nwd/resFLARE-$mol_name-$counter.txt
+
+    numb_line="$(grep -c "" $nwd/${atom_types[$((k-1))]}-bonds-SU)"
+
+    if [[ $counter -eq 1 ]]
+    then
+       if [[ $coord_atom =~ "${atom_types[$((k-1))]}" ]]
+       then
+        coordnumb_line=$((numb_line))
+        for (( q=1; q<=$((numb_line)); q++  ));
+        do
+          if [[ $q -eq 1 ]]
+          then
+            printf "No.,Atoms," >> $cwd/coordINFO-resFLARE.csv
+          else
+            printf "Atoms," >> $cwd/coordINFO-resFLARE.csv
+          fi
+          for (( n=1; n<=$((nbonds)); n++ ));
+          do
+            printf "${bond_types[$((n-1))]}""," >> $cwd/coordINFO-resFLARE.csv
+          done
+          printf "Total coord.," >> $cwd/coordINFO-resFLARE.csv
+        done
+      printf "\n" >> $cwd/coordINFO-resFLARE.csv
+      fi
+    fi
+
+    for (( q=1; q<=$((numb_line)); q++ ));
+    do
+    atom_one="$(grep -m1 "" $nwd/${atom_types[$((k-1))]}-bonds-SU)"
+    printf '|%8s ' "$atom_one" >> $nwd/resFLARE-$mol_name-$counter.txt
+    if [[ $coord_atom =~ "${atom_types[$((k-1))]}" ]]
+    then
+      if [[ $q -eq 1 ]]
+      then
+        printf "$counter,$atom_one" >> $cwd/coordINFO-resFLARE.csv
+      else
+        printf "$atom_one" >> $cwd/coordINFO-resFLARE.csv
+      fi
+    fi
+    tc_no=0
+    for (( n=1; n<=$((nbonds)); n++ ));
+    do
+      c_no="$(grep -c -w "$atom_one" $nwd/${bond_types[$((n-1))]}-bonds)"
+      tc_no=$((tc_no+c_no))
+      printf '|%8i  ' "$c_no" >> $nwd/resFLARE-$mol_name-$counter.txt
+      if [[ $coord_atom =~ "${atom_types[$((k-1))]}" ]]
+      then
+        printf ",$c_no" >> $cwd/coordINFO-resFLARE.csv
+      fi
+      if [[ $((n)) -eq $((nbonds)) ]]
+      then
+        printf '|%10i      |' "$((tc_no))" >> $nwd/resFLARE-$mol_name-$counter.txt
+        if [[ $coord_atom =~ "${atom_types[$((k-1))]}" ]]
+        then
+          printf ",$((tc_no))," >> $cwd/coordINFO-resFLARE.csv
+        fi
+      fi
+    done
+
+    printf "\n" >> $nwd/resFLARE-$mol_name-$counter.txt
+    sed -i '1d' $nwd/${atom_types[$((k-1))]}-bonds-SU
+    done
+    if [[ $coord_atom =~ "${atom_types[$((k-1))]}" ]]
+    then
+      printf "\n" >> $cwd/coordINFO-resFLARE.csv
+    fi
+    rm $nwd/${atom_types[$((k-1))]}-bonds-SU
+  done
+
+  for (( d=1; d<=$((nbonds)); d++ ));
+  do
+    rm $nwd/${bond_types[$((d-1))]}-bonds
+  done
+
+  echo "$calctype" >> $cwd/$calctype.csv
+
+  #time conversion
+  timestep=$(echo "$loops*$adjstep*$jump*$onestepeq" | bc)
+  echo $timestep >> $cwd/time.csv
+
+  #check the next line starts a new molecule
+  next_line="$(grep "" $cwd/$file_name-cp | head -1)"
+  if [[ $next_line -gt 0 ]]
+  then
+    loops=$((loops+1))
+  fi
+  cd ../
+
+done
+rm $cwd/$file_name-cp
+
+#writing a Python script to get
+#Min. bond length, Max. bond length, and Mean bond length variation with the steps.
+
+cp $cwd/bondINFO-resFLARE.csv $cwd/bondINFO-resFLARE-cp.csv
+sed -i '1d' $cwd/bondINFO-resFLARE-cp.csv
+
+echo "import matplotlib.pyplot as plt"  >> $cwd/resFLARE_plots.py
+echo "import csv" >> $cwd/resFLARE_plots.py
+echo "import numpy as np" >> $cwd/resFLARE_plots.py
+echo ""  >> $cwd/resFLARE_plots.py
+
+echo "number = []"  >> $cwd/resFLARE_plots.py
+
+for (( j=1; j<=$((nbonds)); j++ ));
+do
+  echo "minLength_$j = []"  >> $cwd/resFLARE_plots.py
+  echo "maxLength_$j = []"  >> $cwd/resFLARE_plots.py
+  echo "meanLength_$j = []"  >> $cwd/resFLARE_plots.py
+  echo ""  >> $cwd/resFLARE_plots.py
+done
+
+echo "with open('time.csv', 'r') as datafile:"  >> $cwd/resFLARE_plots.py
+echo "    plotting = csv.reader(datafile, delimiter=',')"  >> $cwd/resFLARE_plots.py
+echo ""  >> $cwd/resFLARE_plots.py
+
+echo "    for rows in plotting:"  >> $cwd/resFLARE_plots.py
+echo "        number.append(float(rows[0]))"  >> $cwd/resFLARE_plots.py
+
+echo "with open('bondINFO-resFLARE-cp.csv', 'r') as datafile:"  >> $cwd/resFLARE_plots.py
+echo "    plotting = csv.reader(datafile, delimiter=',')"  >> $cwd/resFLARE_plots.py
+echo ""  >> $cwd/resFLARE_plots.py
+
+echo "    for rows in plotting:"  >> $cwd/resFLARE_plots.py
+echo "#        number.append(int(rows[0]))"  >> $cwd/resFLARE_plots.py
+for (( k=1; k<=$((nbonds)); k++ ));
+do
+  echo "        minLength_$k"".append(float(rows[$((2+((k-1)*6)))]))" >> $cwd/resFLARE_plots.py
+  echo "        maxLength_$k"".append(float(rows[$((3+((k-1)*6)))]))" >> $cwd/resFLARE_plots.py
+  echo "        meanLength_$k"".append(float(rows[$((4+((k-1)*6)))]))" >> $cwd/resFLARE_plots.py
+done
+echo "" >> $cwd/resFLARE_plots.py
+
+for (( m=1; m<=$((nbonds)); m++ ));
+do
+  echo "plt.scatter(number,minLength_$m, label='${bond_types[$((m-1))]}', color='${colorpaltwo[$((m-1))]}', alpha=0.5)" >> $cwd/resFLARE_plots.py
+  echo "plt.plot(number,minLength_$m, color='${colorpaltwo[$((m-1))]}', linewidth = '1.0')" >> $cwd/resFLARE_plots.py
+done
+echo "plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.10), ncol=4)" >> $cwd/resFLARE_plots.py
+echo "#plt.title('Variation of the minimum bond lengths with the steps')" >> $cwd/resFLARE_plots.py
+echo "plt.xlabel('time ($tunit)')" >> $cwd/resFLARE_plots.py
+echo "plt.ylabel('Bond length (Å)')" >> $cwd/resFLARE_plots.py
+echo "plt.savefig('min-bond-lengths.png',dpi=900,bbox_inches=\"tight\")" >> $cwd/resFLARE_plots.py
+echo "plt.cla()" >> $cwd/resFLARE_plots.py
+echo "" >> $cwd/resFLARE_plots.py
+
+for (( m=1; m<=$((nbonds)); m++ ));
+do
+  echo "plt.scatter(number,maxLength_$m, label='${bond_types[$((m-1))]}', color='${colorpaltwo[$((m-1))]}', alpha=0.5)" >> $cwd/resFLARE_plots.py
+  echo "plt.plot(number,maxLength_$m, color='${colorpaltwo[$((m-1))]}', linewidth = '1.0')" >> $cwd/resFLARE_plots.py
+done
+echo "plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.10), ncol=4)" >> $cwd/resFLARE_plots.py
+echo "#plt.title('Variation of the maximum bond lengths with the steps')" >> $cwd/resFLARE_plots.py
+echo "plt.xlabel('time ($tunit)')" >> $cwd/resFLARE_plots.py
+echo "plt.ylabel('Bond length (Å)')" >> $cwd/resFLARE_plots.py
+echo "plt.savefig('max-bond-lengths.png',dpi=900,bbox_inches=\"tight\")" >> $cwd/resFLARE_plots.py
+echo "plt.cla()" >> $cwd/resFLARE_plots.py
+echo "" >> $cwd/resFLARE_plots.py
+
+for (( m=1; m<=$((nbonds)); m++ ));
+do
+  echo "plt.scatter(number,meanLength_$m, label='${bond_types[$((m-1))]}', color='${colorpaltwo[$((m-1))]}', alpha=0.5)" >> $cwd/resFLARE_plots.py
+  echo "plt.plot(number,meanLength_$m, color='${colorpaltwo[$((m-1))]}', linewidth = '1.0')" >> $cwd/resFLARE_plots.py
+done
+echo "plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.10), ncol=4)" >> $cwd/resFLARE_plots.py
+echo "#plt.title('Variation of the mean bond lengths with the steps')" >> $cwd/resFLARE_plots.py
+echo "plt.xlabel('time ($tunit)')" >> $cwd/resFLARE_plots.py
+echo "plt.ylabel('Bond length (Å)')" >> $cwd/resFLARE_plots.py
+echo "plt.savefig('mean-bond-lengths.png',dpi=900,bbox_inches=\"tight\")" >> $cwd/resFLARE_plots.py
+echo "plt.cla()" >> $cwd/resFLARE_plots.py
+echo "" >> $cwd/resFLARE_plots.py
+
+python3 $cwd/resFLARE_plots.py
+
+mkdir $cwd/bondINFO-$mol_name
+mv $cwd/min-bond-lengths.png $cwd/bondINFO-$mol_name/
+mv $cwd/max-bond-lengths.png $cwd/bondINFO-$mol_name/
+mv $cwd/mean-bond-lengths.png $cwd/bondINFO-$mol_name/
+mv $cwd/resFLARE_plots.py $cwd/bondINFO-$mol_name/
+mv $cwd/bondINFO-resFLARE.csv $cwd/bondINFO-$mol_name/
+
+rm bondINFO-resFLARE-cp.csv
+
+if [[ $dyesorno =~ "y" ]]
+then
+
+#writing a Python script to get
+#different dihedral angle variation with the steps.
+
+cp $cwd/dihedralINFO-resFLARE.csv $cwd/dihedralINFO-resFLARE-cp.csv
+sed -i '1d' $cwd/dihedralINFO-resFLARE-cp.csv
+
+echo "import matplotlib.pyplot as plt"  >> $cwd/resFLARE_dihedralplots.py
+echo "import csv" >> $cwd/resFLARE_dihedralplots.py
+echo "import numpy as np" >> $cwd/resFLARE_dihedralplots.py
+echo ""  >> $cwd/resFLARE_dihedralplots.py
+
+echo "number = []"  >> $cwd/resFLARE_dihedralplots.py
+echo ""  >> $cwd/resFLARE_dihedralplots.py
+echo "dihedral0to20 = []"  >> $cwd/resFLARE_dihedralplots.py
+echo "dihedral20to40 = []"  >> $cwd/resFLARE_dihedralplots.py
+echo "dihedral40to60 = []"  >> $cwd/resFLARE_dihedralplots.py
+echo "dihedral60to80 = []"  >> $cwd/resFLARE_dihedralplots.py
+echo "dihedral80to100 = []"  >> $cwd/resFLARE_dihedralplots.py
+echo "dihedral100to120 = []"  >> $cwd/resFLARE_dihedralplots.py
+echo "dihedral120to140 = []"  >> $cwd/resFLARE_dihedralplots.py
+echo "dihedral140to160 = []"  >> $cwd/resFLARE_dihedralplots.py
+echo "dihedral160to180 = []"  >> $cwd/resFLARE_dihedralplots.py
+echo ""  >> $cwd/resFLARE_dihedralplots.py
+
+echo "with open('time.csv', 'r') as datafile:"  >> $cwd/resFLARE_dihedralplots.py
+echo "    plotting = csv.reader(datafile, delimiter=',')"  >> $cwd/resFLARE_dihedralplots.py
+echo ""  >> $cwd/resFLARE_dihedralplots.py
+
+echo "    for rows in plotting:"  >> $cwd/resFLARE_dihedralplots.py
+echo "        number.append(float(rows[0]))"  >> $cwd/resFLARE_dihedralplots.py
+
+echo "with open('dihedralINFO-resFLARE-cp.csv', 'r') as datafile:"  >> $cwd/resFLARE_dihedralplots.py
+echo "    plotting = csv.reader(datafile, delimiter=',')"  >> $cwd/resFLARE_dihedralplots.py
+echo ""  >> $cwd/resFLARE_dihedralplots.py
+
+echo "    for rows in plotting:"  >> $cwd/resFLARE_dihedralplots.py
+echo "#        number.append(int(rows[0]))"  >> $cwd/resFLARE_dihedralplots.py
+echo "        dihedral0to20"".append(int(rows[1]))" >> $cwd/resFLARE_dihedralplots.py
+echo "        dihedral20to40"".append(int(rows[2]))" >> $cwd/resFLARE_dihedralplots.py
+echo "        dihedral40to60"".append(int(rows[3]))" >> $cwd/resFLARE_dihedralplots.py
+echo "        dihedral60to80"".append(int(rows[4]))" >> $cwd/resFLARE_dihedralplots.py
+echo "        dihedral80to100"".append(int(rows[5]))" >> $cwd/resFLARE_dihedralplots.py
+echo "        dihedral100to120"".append(int(rows[6]))" >> $cwd/resFLARE_dihedralplots.py
+echo "        dihedral120to140"".append(int(rows[7]))" >> $cwd/resFLARE_dihedralplots.py
+echo "        dihedral140to160"".append(int(rows[8]))" >> $cwd/resFLARE_dihedralplots.py
+echo "        dihedral160to180"".append(int(rows[9]))" >> $cwd/resFLARE_dihedralplots.py
+echo "" >> $cwd/resFLARE_dihedralplots.py
+
+echo "#plt.scatter(number,dihedral0to20, label='0°- 20°', alpha=0.5)" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.plot(number,dihedral0to20, label='0°- 20°', color='${colorpalthree[0]}', linewidth = '1.0')" >> $cwd/resFLARE_dihedralplots.py
+
+echo "#plt.scatter(number,dihedral20to40, label='20°-40°', alpha=0.5)" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.plot(number,dihedral20to40, label='20°- 40°', color='${colorpalthree[1]}', linewidth = '1.0')" >> $cwd/resFLARE_dihedralplots.py
+
+echo "#plt.scatter(number,dihedral40to60, label='40°-60°', alpha=0.5)" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.plot(number,dihedral40to60, label='40°- 60°', color='${colorpalthree[2]}', linewidth = '1.0')" >> $cwd/resFLARE_dihedralplots.py
+
+echo "#plt.scatter(number,dihedral60to80, label='60°-80°', alpha=0.5)" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.plot(number,dihedral60to80, label='60°- 80°', color='${colorpalthree[3]}', linewidth = '1.0')" >> $cwd/resFLARE_dihedralplots.py
+
+echo "#plt.scatter(number,dihedral80to100, label='80°-100°', alpha=0.5)" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.plot(number,dihedral80to100, label='80°- 100°', color='${colorpalthree[4]}', linewidth = '1.0')" >> $cwd/resFLARE_dihedralplots.py
+
+echo "#plt.scatter(number,dihedral100to120, label='100°-120°', alpha=0.5)" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.plot(number,dihedral100to120, label='100°- 120°', color='${colorpalthree[5]}', linewidth = '1.0')" >> $cwd/resFLARE_dihedralplots.py
+
+echo "#plt.scatter(number,dihedral120to140, label='120°-140°', alpha=0.5)" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.plot(number,dihedral120to140, label='120°- 140°', color='${colorpalthree[6]}', linewidth = '1.0')" >> $cwd/resFLARE_dihedralplots.py
+
+echo "#plt.scatter(number,dihedral140to160, label='140°-160°', alpha=0.5)" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.plot(number,dihedral140to160, label='140°- 160°', color='${colorpalthree[7]}', linewidth = '1.0')" >> $cwd/resFLARE_dihedralplots.py
+
+echo "#plt.scatter(number,dihedral160to180, label='160°-180°', alpha=0.5)" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.plot(number,dihedral160to180, label='160°- 180°', color='${colorpalthree[8]}', linewidth = '1.0')" >> $cwd/resFLARE_dihedralplots.py
+
+echo "" >> $cwd/resFLARE_dihedralplots.py
+
+echo "plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.25), ncol=3)" >> $cwd/resFLARE_dihedralplots.py
+echo "#plt.title('Variation of the different dihedral count with the steps')" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.xlabel('time ($tunit)')" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.ylabel('Count')" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.savefig('dihedral-angle-count.png',dpi=900,bbox_inches=\"tight\")" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.cla()" >> $cwd/resFLARE_dihedralplots.py
+
+echo "arr0 = ""np"".array(dihedral0to20)" >> $cwd/resFLARE_dihedralplots.py
+echo "arr1 = ""np"".array(dihedral20to40)" >> $cwd/resFLARE_dihedralplots.py
+echo "arr2 = ""np"".array(dihedral40to60)" >> $cwd/resFLARE_dihedralplots.py
+echo "arr3 = ""np"".array(dihedral60to80)" >> $cwd/resFLARE_dihedralplots.py
+echo "arr4 = ""np"".array(dihedral80to100)" >> $cwd/resFLARE_dihedralplots.py
+echo "arr5 = ""np"".array(dihedral100to120)" >> $cwd/resFLARE_dihedralplots.py
+echo "arr6 = ""np"".array(dihedral120to140)" >> $cwd/resFLARE_dihedralplots.py
+echo "arr7 = ""np"".array(dihedral140to160)" >> $cwd/resFLARE_dihedralplots.py
+echo "arr8 = ""np"".array(dihedral160to180)" >> $cwd/resFLARE_dihedralplots.py
+echo "" >> $cwd/resFLARE_dihedralplots.py
+
+echo "plt.bar(number, arr0, color = '${colorpalthree[0]}', width=$timewidth)" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.bar(number, arr1, bottom=arr0, color = '${colorpalthree[1]}', width=$timewidth)" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.bar(number, arr2, bottom=arr0+arr1, color = '${colorpalthree[2]}', width=$timewidth)" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.bar(number, arr3, bottom=arr0+arr1+arr2, color = '${colorpalthree[3]}', width=$timewidth)" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.bar(number, arr4, bottom=arr0+arr1+arr2+arr3, color = '${colorpalthree[4]}', width=$timewidth)" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.bar(number, arr5, bottom=arr0+arr1+arr2+arr3+arr4, color = '${colorpalthree[5]}', width=$timewidth)" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.bar(number, arr6, bottom=arr0+arr1+arr2+arr3+arr4+arr5, color = '${colorpalthree[6]}', width=$timewidth)" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.bar(number, arr7, bottom=arr0+arr1+arr2+arr3+arr4+arr5+arr6, color = '${colorpalthree[7]}', width=$timewidth)" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.bar(number, arr8, bottom=arr0+arr1+arr2+arr3+arr4+arr5+arr6+arr7, color = '${colorpalthree[8]}', width=$timewidth)" >> $cwd/resFLARE_dihedralplots.py
+
+echo "plt.legend(['0°-20°', '20°-40°', '40°-60°', '60°-80°', '80°-100°', '100°-120°', '120°-140°', '140°-160°', '160°-180°'], loc='center right', title='Dihedral\nangle', bbox_to_anchor=(1.35, 0.5))" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.xlabel('time ($tunit)')" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.ylabel('Count')" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.savefig('dihedral-angle-count-bar.png',dpi=900,bbox_inches=\"tight\")" >> $cwd/resFLARE_dihedralplots.py
+echo "plt.cla()" >> $cwd/resFLARE_dihedralplots.py
+
+python3 $cwd/resFLARE_dihedralplots.py
+
+mkdir $cwd/dihedralINFO-$mol_name
+mv $cwd/dihedral-angle-count.png $cwd/dihedralINFO-$mol_name/
+mv $cwd/resFLARE_dihedralplots.py $cwd/dihedralINFO-$mol_name/
+mv $cwd/dihedralINFO-resFLARE.csv $cwd/dihedralINFO-$mol_name/
+mv $cwd/dihedral-angle-count-bar.png $cwd/dihedralINFO-$mol_name/
+
+rm dihedralINFO-resFLARE-cp.csv
+
+fi
+
+#writing a Python script to get
+#percentage of coordination numbers
+
+coordbond=$coord_atom–$coord_atom_two
+numcoordatoms=1
+
+cp $cwd/coordINFO-resFLARE.csv $cwd/coordINFO-resFLARE-cp.csv
+
+for (( h=1; h<=$((coordnumb_line)); h++ ));
+do
+
+awk -F "," -v col=$coordbond 'NR==1{for(i=1;i<=NF;i++){if($i==col){c=i;break}} print $c} NR>1{print $c}' $cwd/coordINFO-resFLARE-cp.csv > $cwd/$coord_atom-$h
+sed -i '1d' $cwd/$coord_atom-$h
+
+for (( j=1; j<=$((nbonds+2)); j++ ));
+do
+cut --complement -f 1 -d, $cwd/coordINFO-resFLARE-cp.csv > $cwd/coordINFO-temp
+rm $cwd/coordINFO-resFLARE-cp.csv
+mv $cwd/coordINFO-temp $cwd/coordINFO-resFLARE-cp.csv
+done
+done
+
+rm $cwd/coordINFO-resFLARE-cp.csv
+
+nlinecoord="$(grep -c "" $cwd/coordINFO-resFLARE.csv)"
+nlinecoord=$((nlinecoord-1))
+
+for (( h=1; h<=$((nlinecoord)); h++ ));
+do
+
+coord0=0
+coord1=0
+coord2=0
+coord3=0
+coord4=0
+coord5=0
+coord6=0
+coord7=0
+coord8=0
+coord9=0
+coord10=0
+coord11=0
+coord12=0
+coord13=0
+coord14=0
+coord15=0
+
+for (( k=1; k<=$((coordnumb_line)); k++ ));
+do
+
+clineone="$(grep -m1 "" $cwd/$coord_atom-$k)"
+
+if [[ $((clineone)) -lt 1 ]]
+then
+coord0=$((coord0+1))
+elif [[ $((clineone)) -lt 2 ]]
+then
+coord1=$((coord1+1))
+elif [[ $((clineone)) -lt 3 ]]
+then
+coord2=$((coord2+1))
+elif [[ $((clineone)) -lt 4 ]]
+then
+coord3=$((coord3+1))
+elif [[ $((clineone)) -lt 5 ]]
+then
+coord4=$((coord4+1))
+elif [[ $((clineone)) -lt 6 ]]
+then
+coord5=$((coord5+1))
+elif [[ $((clineone)) -lt 7 ]]
+then
+coord6=$((coord6+1))
+elif [[ $((clineone)) -lt 8 ]]
+then
+coord7=$((coord7+1))
+elif [[ $((clineone)) -lt 9 ]]
+then
+coord8=$((coord8+1))
+elif [[ $((clineone)) -lt 10 ]]
+then
+coord9=$((coord9+1))
+elif [[ $((clineone)) -lt 11 ]]
+then
+coord10=$((coord10+1))
+elif [[ $((clineone)) -lt 12 ]]
+then
+coord11=$((coord11+1))
+elif [[ $((clineone)) -lt 13 ]]
+then
+coord12=$((coord12+1))
+elif [[ $((clineone)) -lt 14 ]]
+then
+coord13=$((coord13+1))
+elif [[ $((clineone)) -lt 15 ]]
+then
+coord14=$((coord14+1))
+elif [[ $((clineone)) -lt 16 ]]
+then
+coord15=$((coord15+1))
+fi
+
+sed -i '1d' $cwd/$coord_atom-$k
+done
+
+if [[ $h -eq 1 ]]
+then
+  echo "No.,0%,1%,2%,3%,4%,5%,6%,7%,8%,9%,10%,11%,12%,13%,14%,15%" >> $cwd/percentage-of-coordination-$coord_atom.csv
+  echo "No.,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15" >> $cwd/total-coordination-$coord_atom.csv
+fi
+
+p0=$(echo "scale=6; $coord0/$coordnumb_line" | bc)
+p0=$(echo "scale=6; $p0*100.00" | bc)
+
+p1=$(echo "scale=6; $coord1/$coordnumb_line" | bc)
+p1=$(echo "scale=6; $p1*100.00" | bc)
+
+p2=$(echo "scale=6; $coord2/$coordnumb_line" | bc)
+p2=$(echo "scale=6; $p2*100.00" | bc)
+
+p3=$(echo "scale=6; $coord3/$coordnumb_line" | bc)
+p3=$(echo "scale=6; $p3*100.00" | bc)
+
+p4=$(echo "scale=6; $coord4/$coordnumb_line" | bc)
+p4=$(echo "scale=6; $p4*100.00" | bc)
+
+p5=$(echo "scale=6; $coord5/$coordnumb_line" | bc)
+p5=$(echo "scale=6; $p5*100.00" | bc)
+
+p6=$(echo "scale=6; $coord6/$coordnumb_line" | bc)
+p6=$(echo "scale=6; $p6*100.00" | bc)
+
+p7=$(echo "scale=6; $coord7/$coordnumb_line" | bc)
+p7=$(echo "scale=6; $p7*100.00" | bc)
+
+p8=$(echo "scale=6; $coord8/$coordnumb_line" | bc)
+p8=$(echo "scale=6; $p8*100.00" | bc)
+
+p9=$(echo "scale=6; $coord9/$coordnumb_line" | bc)
+p9=$(echo "scale=6; $p9*100.00" | bc)
+
+p10=$(echo "scale=6; $coord10/$coordnumb_line" | bc)
+p10=$(echo "scale=6; $p10*100.00" | bc)
+
+p11=$(echo "scale=6; $coord11/$coordnumb_line" | bc)
+p11=$(echo "scale=6; $p11*100.00" | bc)
+
+p12=$(echo "scale=6; $coord12/$coordnumb_line" | bc)
+p12=$(echo "scale=6; $p12*100.00" | bc)
+
+p13=$(echo "scale=6; $coord13/$coordnumb_line" | bc)
+p13=$(echo "scale=6; $p13*100.00" | bc)
+
+p14=$(echo "scale=6; $coord14/$coordnumb_line" | bc)
+p14=$(echo "scale=6; $p14*100.00" | bc)
+
+p15=$(echo "scale=6; $coord15/$coordnumb_line" | bc)
+p15=$(echo "scale=6; $p15*100.00" | bc)
+
+echo "$h,$p0,$p1,$p2,$p3,$p4,$p5,$p6,$p7,$p8,$p9,$p10,$p11,$p12,$p13,$p14,$p15" >> $cwd/percentage-of-coordination-$coord_atom.csv
+echo "$h,$coord0,$coord1,$coord2,$coord3,$coord4,$coord5,$coord6,$coord7,$coord8,$coord9,$coord10,$coord11,$coord12,$coord13,$coord14,$coord15" >> $cwd/total-coordination-$coord_atom.csv
+
+echo "$coord0,$coord1,$coord2,$coord3,$coord4,$coord5,$coord6,$coord7,$coord8,$coord9,$coord10,$coord11,$coord12,$coord13,$coord14,$coord15" >> $cwd/temp-poc-pcaINFO.csv
+
+done
+
+rm $cwd/$coord_atom-*
+cp $cwd/percentage-of-coordination-$coord_atom.csv $cwd/percentage-of-coordination-$coord_atom-cp.csv
+cp $cwd/total-coordination-$coord_atom.csv $cwd/total-coordination-$coord_atom-cp.csv
+sed -i '1d' $cwd/percentage-of-coordination-$coord_atom-cp.csv
+sed -i '1d' $cwd/total-coordination-$coord_atom-cp.csv
+
+echo "import matplotlib.pyplot as plt"  >> $cwd/resFLARE_coordsplots.py
+echo "import csv" >> $cwd/resFLARE_coordsplots.py
+echo "import numpy as np" >> $cwd/resFLARE_coordsplots.py
+echo "import math"  >> $cwd/resFLARE_coordsplots.py
+echo ""  >> $cwd/resFLARE_coordsplots.py
+
+echo "number = []"  >> $cwd/resFLARE_coordsplots.py
+echo ""  >> $cwd/resFLARE_coordsplots.py
+echo "coord0 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "coord1 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "coord2 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "coord3 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "coord4 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "coord5 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "coord6 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "coord7 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "coord8 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "coord9 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "coord10 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "coord11 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "coord12 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "coord13 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "coord14 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "coord15 = []"  >> $cwd/resFLARE_coordsplots.py
+echo ""  >> $cwd/resFLARE_coordsplots.py
+
+echo "with open('time.csv', 'r') as datafile:"  >> $cwd/resFLARE_coordsplots.py
+echo "    plotting = csv.reader(datafile, delimiter=',')"  >> $cwd/resFLARE_coordsplots.py
+echo ""  >> $cwd/resFLARE_coordsplots.py
+
+echo "    for rows in plotting:"  >> $cwd/resFLARE_coordsplots.py
+echo "        number.append(float(rows[0]))"  >> $cwd/resFLARE_coordsplots.py
+
+echo "with open('percentage-of-coordination-$coord_atom-cp.csv', 'r') as datafile:"  >> $cwd/resFLARE_coordsplots.py
+echo "    plotting = csv.reader(datafile, delimiter=',')"  >> $cwd/resFLARE_coordsplots.py
+echo ""  >> $cwd/resFLARE_coordsplots.py
+
+echo "    for rows in plotting:"  >> $cwd/resFLARE_coordsplots.py
+echo "#        number.append(int(rows[0]))"  >> $cwd/resFLARE_coordsplots.py
+echo "        coord0"".append(float(rows[1]))" >> $cwd/resFLARE_coordsplots.py
+echo "        coord1"".append(float(rows[2]))" >> $cwd/resFLARE_coordsplots.py
+echo "        coord2"".append(float(rows[3]))" >> $cwd/resFLARE_coordsplots.py
+echo "        coord3"".append(float(rows[4]))" >> $cwd/resFLARE_coordsplots.py
+echo "        coord4"".append(float(rows[5]))" >> $cwd/resFLARE_coordsplots.py
+echo "        coord5"".append(float(rows[6]))" >> $cwd/resFLARE_coordsplots.py
+echo "        coord6"".append(float(rows[7]))" >> $cwd/resFLARE_coordsplots.py
+echo "        coord7"".append(float(rows[8]))" >> $cwd/resFLARE_coordsplots.py
+echo "        coord8"".append(float(rows[9]))" >> $cwd/resFLARE_coordsplots.py
+echo "        coord9"".append(float(rows[10]))" >> $cwd/resFLARE_coordsplots.py
+echo "        coord10"".append(float(rows[11]))" >> $cwd/resFLARE_coordsplots.py
+echo "        coord11"".append(float(rows[12]))" >> $cwd/resFLARE_coordsplots.py
+echo "        coord12"".append(float(rows[13]))" >> $cwd/resFLARE_coordsplots.py
+echo "        coord13"".append(float(rows[14]))" >> $cwd/resFLARE_coordsplots.py
+echo "        coord14"".append(float(rows[15]))" >> $cwd/resFLARE_coordsplots.py
+echo "        coord15"".append(float(rows[16]))" >> $cwd/resFLARE_coordsplots.py
+echo "" >> $cwd/resFLARE_coordsplots.py
+
+echo "arr0 = ""np"".array(coord0)" >> $cwd/resFLARE_coordsplots.py
+echo "arr1 = ""np"".array(coord1)" >> $cwd/resFLARE_coordsplots.py
+echo "arr2 = ""np"".array(coord2)" >> $cwd/resFLARE_coordsplots.py
+echo "arr3 = ""np"".array(coord3)" >> $cwd/resFLARE_coordsplots.py
+echo "arr4 = ""np"".array(coord4)" >> $cwd/resFLARE_coordsplots.py
+echo "arr5 = ""np"".array(coord5)" >> $cwd/resFLARE_coordsplots.py
+echo "arr6 = ""np"".array(coord6)" >> $cwd/resFLARE_coordsplots.py
+echo "arr7 = ""np"".array(coord7)" >> $cwd/resFLARE_coordsplots.py
+echo "arr8 = ""np"".array(coord8)" >> $cwd/resFLARE_coordsplots.py
+echo "arr9 = ""np"".array(coord9)" >> $cwd/resFLARE_coordsplots.py
+echo "arr10 = ""np"".array(coord10)" >> $cwd/resFLARE_coordsplots.py
+echo "arr11 = ""np"".array(coord11)" >> $cwd/resFLARE_coordsplots.py
+echo "arr12 = ""np"".array(coord12)" >> $cwd/resFLARE_coordsplots.py
+echo "arr13 = ""np"".array(coord13)" >> $cwd/resFLARE_coordsplots.py
+echo "arr14 = ""np"".array(coord14)" >> $cwd/resFLARE_coordsplots.py
+echo "arr15 = ""np"".array(coord15)" >> $cwd/resFLARE_coordsplots.py
+echo "" >> $cwd/resFLARE_coordsplots.py
+
+echo "plt.bar(number, arr0, color = '${colorpalthree[0]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(number, arr1, bottom=arr0, color = '${colorpalthree[1]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(number, arr2, bottom=arr0+arr1, color = '${colorpalthree[2]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(number, arr3, bottom=arr0+arr1+arr2, color = '${colorpalthree[3]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(number, arr4, bottom=arr0+arr1+arr2+arr3, color = '${colorpalthree[4]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(number, arr5, bottom=arr0+arr1+arr2+arr3+arr4, color = '${colorpalthree[5]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(number, arr6, bottom=arr0+arr1+arr2+arr3+arr4+arr5, color = '${colorpalthree[6]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(number, arr7, bottom=arr0+arr1+arr2+arr3+arr4+arr5+arr6, color = '${colorpalthree[7]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(number, arr8, bottom=arr0+arr1+arr2+arr3+arr4+arr5+arr6+arr7, color = '${colorpalthree[8]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(number, arr9, bottom=arr0+arr1+arr2+arr3+arr4+arr5+arr6+arr7+arr8, color = '${colorpalthree[9]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(number, arr10, bottom=arr0+arr1+arr2+arr3+arr4+arr5+arr6+arr7+arr8+arr9, color = '${colorpalthree[10]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(number, arr11, bottom=arr0+arr1+arr2+arr3+arr4+arr5+arr6+arr7+arr8+arr9+arr10, color = '${colorpalthree[11]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(number, arr12, bottom=arr0+arr1+arr2+arr3+arr4+arr5+arr6+arr7+arr8+arr9+arr10+arr11, color = '${colorpalthree[12]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(number, arr13, bottom=arr0+arr1+arr2+arr3+arr4+arr5+arr6+arr7+arr8+arr9+arr10+arr11+arr12, color = '${colorpalthree[13]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(number, arr14, bottom=arr0+arr1+arr2+arr3+arr4+arr5+arr6+arr7+arr8+arr9+arr10+arr11+arr12+arr13, color = '${colorpalthree[14]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(number, arr15, bottom=arr0+arr1+arr2+arr3+arr4+arr5+arr6+arr7+arr8+arr9+arr10+arr11+arr12+arr13+arr14, color = '${colorpalthree[15]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "" >> $cwd/resFLARE_coordsplots.py
+
+echo "plt.legend(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"], loc='center right', title='$coord_atom atom\\ncoordination\\nnumber', bbox_to_anchor=(1.25, 0.5))" >> $cwd/resFLARE_coordsplots.py
+echo "plt.xlabel('time ($tunit)')" >> $cwd/resFLARE_coordsplots.py
+echo "plt.ylabel('Atom percentage (%)')" >> $cwd/resFLARE_coordsplots.py
+echo "plt.savefig('percentage-of-coordination.png',dpi=900,bbox_inches=\"tight\")" >> $cwd/resFLARE_coordsplots.py
+echo "plt.cla()" >> $cwd/resFLARE_coordsplots.py
+echo "" >> $cwd/resFLARE_coordsplots.py
+
+echo "newnumber = []"  >> $cwd/resFLARE_coordsplots.py
+echo ""  >> $cwd/resFLARE_coordsplots.py
+echo "newcoord0 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "newcoord1 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "newcoord2 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "newcoord3 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "newcoord4 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "newcoord5 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "newcoord6 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "newcoord7 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "newcoord8 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "newcoord9 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "newcoord10 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "newcoord11 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "newcoord12 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "newcoord13 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "newcoord14 = []"  >> $cwd/resFLARE_coordsplots.py
+echo "newcoord15 = []"  >> $cwd/resFLARE_coordsplots.py
+echo ""  >> $cwd/resFLARE_coordsplots.py
+
+echo "with open('time.csv', 'r') as datafile:"  >> $cwd/resFLARE_coordsplots.py
+echo "    plotting = csv.reader(datafile, delimiter=',')"  >> $cwd/resFLARE_coordsplots.py
+echo ""  >> $cwd/resFLARE_coordsplots.py
+
+echo "    for rows in plotting:"  >> $cwd/resFLARE_coordsplots.py
+echo "        newnumber.append(float(rows[0]))"  >> $cwd/resFLARE_coordsplots.py
+
+echo "with open('total-coordination-$coord_atom-cp.csv', 'r') as datafile:"  >> $cwd/resFLARE_coordsplots.py
+echo "    plotting = csv.reader(datafile, delimiter=',')"  >> $cwd/resFLARE_coordsplots.py
+echo ""  >> $cwd/resFLARE_coordsplots.py
+
+echo "    for rows in plotting:"  >> $cwd/resFLARE_coordsplots.py
+echo "#        newnumber.append(int(rows[0]))"  >> $cwd/resFLARE_coordsplots.py
+echo "        newcoord0"".append(float(rows[1]))" >> $cwd/resFLARE_coordsplots.py
+echo "        newcoord1"".append(float(rows[2]))" >> $cwd/resFLARE_coordsplots.py
+echo "        newcoord2"".append(float(rows[3]))" >> $cwd/resFLARE_coordsplots.py
+echo "        newcoord3"".append(float(rows[4]))" >> $cwd/resFLARE_coordsplots.py
+echo "        newcoord4"".append(float(rows[5]))" >> $cwd/resFLARE_coordsplots.py
+echo "        newcoord5"".append(float(rows[6]))" >> $cwd/resFLARE_coordsplots.py
+echo "        newcoord6"".append(float(rows[7]))" >> $cwd/resFLARE_coordsplots.py
+echo "        newcoord7"".append(float(rows[8]))" >> $cwd/resFLARE_coordsplots.py
+echo "        newcoord8"".append(float(rows[9]))" >> $cwd/resFLARE_coordsplots.py
+echo "        newcoord9"".append(float(rows[10]))" >> $cwd/resFLARE_coordsplots.py
+echo "        newcoord10"".append(float(rows[11]))" >> $cwd/resFLARE_coordsplots.py
+echo "        newcoord11"".append(float(rows[12]))" >> $cwd/resFLARE_coordsplots.py
+echo "        newcoord12"".append(float(rows[13]))" >> $cwd/resFLARE_coordsplots.py
+echo "        newcoord13"".append(float(rows[14]))" >> $cwd/resFLARE_coordsplots.py
+echo "        newcoord14"".append(float(rows[15]))" >> $cwd/resFLARE_coordsplots.py
+echo "        newcoord15"".append(float(rows[16]))" >> $cwd/resFLARE_coordsplots.py
+echo "" >> $cwd/resFLARE_coordsplots.py
+
+echo "narr0 = ""np"".array(newcoord0)" >> $cwd/resFLARE_coordsplots.py
+echo "narr1 = ""np"".array(newcoord1)" >> $cwd/resFLARE_coordsplots.py
+echo "narr2 = ""np"".array(newcoord2)" >> $cwd/resFLARE_coordsplots.py
+echo "narr3 = ""np"".array(newcoord3)" >> $cwd/resFLARE_coordsplots.py
+echo "narr4 = ""np"".array(newcoord4)" >> $cwd/resFLARE_coordsplots.py
+echo "narr5 = ""np"".array(newcoord5)" >> $cwd/resFLARE_coordsplots.py
+echo "narr6 = ""np"".array(newcoord6)" >> $cwd/resFLARE_coordsplots.py
+echo "narr7 = ""np"".array(newcoord7)" >> $cwd/resFLARE_coordsplots.py
+echo "narr8 = ""np"".array(newcoord8)" >> $cwd/resFLARE_coordsplots.py
+echo "narr9 = ""np"".array(newcoord9)" >> $cwd/resFLARE_coordsplots.py
+echo "narr10 = ""np"".array(newcoord10)" >> $cwd/resFLARE_coordsplots.py
+echo "narr11 = ""np"".array(newcoord11)" >> $cwd/resFLARE_coordsplots.py
+echo "narr12 = ""np"".array(newcoord12)" >> $cwd/resFLARE_coordsplots.py
+echo "narr13 = ""np"".array(newcoord13)" >> $cwd/resFLARE_coordsplots.py
+echo "narr14 = ""np"".array(newcoord14)" >> $cwd/resFLARE_coordsplots.py
+echo "narr15 = ""np"".array(newcoord15)" >> $cwd/resFLARE_coordsplots.py
+echo "" >> $cwd/resFLARE_coordsplots.py
+
+echo "plt.bar(newnumber, narr0, color = '${colorpalthree[0]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(newnumber, narr1, bottom=narr0, color = '${colorpalthree[1]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(newnumber, narr2, bottom=narr0+narr1, color = '${colorpalthree[2]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(newnumber, narr3, bottom=narr0+narr1+narr2, color = '${colorpalthree[3]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(newnumber, narr4, bottom=narr0+narr1+narr2+narr3, color = '${colorpalthree[4]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(newnumber, narr5, bottom=narr0+narr1+narr2+narr3+narr4, color = '${colorpalthree[5]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(newnumber, narr6, bottom=narr0+narr1+narr2+narr3+narr4+narr5, color = '${colorpalthree[6]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(newnumber, narr7, bottom=narr0+narr1+narr2+narr3+narr4+narr5+narr6, color = '${colorpalthree[7]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(newnumber, narr8, bottom=narr0+narr1+narr2+narr3+narr4+narr5+narr6+narr7, color = '${colorpalthree[8]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(newnumber, narr9, bottom=narr0+narr1+narr2+narr3+narr4+narr5+narr6+narr7+narr8, color = '${colorpalthree[9]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(newnumber, narr10, bottom=narr0+narr1+narr2+narr3+narr4+narr5+narr6+narr7+narr8+narr9, color = '${colorpalthree[10]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(newnumber, narr11, bottom=narr0+narr1+narr2+narr3+narr4+narr5+narr6+narr7+narr8+narr9+narr10, color = '${colorpalthree[11]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(newnumber, narr12, bottom=narr0+narr1+narr2+narr3+narr4+narr5+narr6+narr7+narr8+narr9+narr10+narr11, color = '${colorpalthree[12]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(newnumber, narr13, bottom=narr0+narr1+narr2+narr3+narr4+narr5+narr6+narr7+narr8+narr9+narr10+narr11+narr12, color = '${colorpalthree[13]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(newnumber, narr14, bottom=narr0+narr1+narr2+narr3+narr4+narr5+narr6+narr7+narr8+narr9+narr10+narr11+narr12+narr13, color = '${colorpalthree[14]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.bar(newnumber, narr15, bottom=narr0+narr1+narr2+narr3+narr4+narr5+narr6+narr7+narr8+narr9+narr10+narr11+narr12+narr13+narr14, color = '${colorpalthree[15]}', width=$timewidth)" >> $cwd/resFLARE_coordsplots.py
+echo "" >> $cwd/resFLARE_coordsplots.py
+
+echo "atom_ticks = range(0,$((coordnumb_line+1)),4)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.yticks(atom_ticks)" >> $cwd/resFLARE_coordsplots.py
+echo "plt.legend(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"], loc='center right', title='$coord_atom atom\\ncoordination\\nnumber', bbox_to_anchor=(1.25, 0.5))" >> $cwd/resFLARE_coordsplots.py
+echo "plt.xlabel('time ($tunit)')" >> $cwd/resFLARE_coordsplots.py
+echo "plt.ylabel('Number of atoms')" >> $cwd/resFLARE_coordsplots.py
+echo "plt.savefig('total-coordination.png',dpi=900,bbox_inches=\"tight\")" >> $cwd/resFLARE_coordsplots.py
+echo "" >> $cwd/resFLARE_coordsplots.py
+
+python3 $cwd/resFLARE_coordsplots.py
+
+rm percentage-of-coordination-$coord_atom-cp.csv
+rm total-coordination-$coord_atom-cp.csv
+
+mkdir $cwd/coordINFO-$mol_name
+mv $cwd/total-coordination-$coord_atom.csv $cwd/coordINFO-$mol_name/
+mv $cwd/percentage-of-coordination.png $cwd/coordINFO-$mol_name/
+mv $cwd/total-coordination.png $cwd/coordINFO-$mol_name/
+mv $cwd/resFLARE_coordsplots.py $cwd/coordINFO-$mol_name/
+mv $cwd/coordINFO-resFLARE.csv $cwd/coordINFO-$mol_name/
+mv percentage-of-coordination-$coord_atom.csv $cwd/coordINFO-$mol_name/
+
+for (( i=1; i<=$((nbonds)); i++ ));
+do
+  printf "Min. bond length (Å) (${bond_types[$((i-1))]}),Max. bond length (Å) (${bond_types[$((i-1))]}),Mean bond length (Å) (${bond_types[$((i-1))]}),Pop. std. dev. (${bond_types[$((i-1))]}),Std. error (${bond_types[$((i-1))]})," >> $cwd/pcaINFO-resFLARE.csv
+done
+
+if [[ $dyesorno =~ "y" ]]
+then
+printf "POC for 0,POC for 1,POC for 2,POC for 3,POC for 4,POC for 5,POC for 6,POC for 7,POC for 8,POC for 9,POC for 10,POC for 11,POC for 12,POC for 13,POC for 14,POC for 15,0°-20°,20°-40°,40°-60°,60°-80°,80°-100°,100°-120°,120°-140°,140°-160°,160°-180°,target" >> $cwd/pcaINFO-resFLARE.csv
+else
+printf "POC for 0,POC for 1,POC for 2,POC for 3,POC for 4,POC for 5,POC for 6,POC for 7,POC for 8,POC for 9,POC for 10,POC for 11,POC for 12,POC for 13,POC for 14,POC for 15,target" >> $cwd/pcaINFO-resFLARE.csv
+fi
+printf "\n" >> $cwd/pcaINFO-resFLARE.csv
+
+cp $cwd/bondINFO-$mol_name/bondINFO-resFLARE.csv $cwd/bondINFO-resFLARE.csv
+sed -i '1d' $cwd/bondINFO-resFLARE.csv
+
+for (( i=1; i<=$((nbonds)); i++ ));
+do
+if [[ $((i)) -eq 1 ]]
+then
+awk -F"," '{print $3","$4","$5","$6","$7}' $cwd/bondINFO-resFLARE.csv > $cwd/bond-$i.csv
+awk -F"," '{$2=$3=$4=$5=$6=$7=""; print $0}' $cwd/bondINFO-resFLARE.csv > $cwd/bondtemp.csv
+cp $cwd/bond-$i.csv $cwd/pca-bondINFO.csv
+rm $cwd/bond-$i.csv
+rm $cwd/bondINFO-resFLARE.csv
+else
+awk  '{print $3","$4","$5","$6","$7}' $cwd/bondtemp.csv > $cwd/bond-$i.csv
+awk  '{$2=$3=$4=$5=$6=$7=""; print $0}' $cwd/bondtemp.csv > $cwd/bondT.csv
+rm $cwd/bondtemp.csv
+mv $cwd/bondT.csv $cwd/bondtemp.csv
+paste -d, <(cut -f1 $cwd/pca-bondINFO.csv) <(cut -f1 $cwd/bond-$i.csv) > $cwd/pca-bondINFO-temp.csv
+rm $cwd/pca-bondINFO.csv
+mv $cwd/pca-bondINFO-temp.csv $cwd/pca-bondINFO.csv
+rm $cwd/bond-$i.csv
+fi
+done
+
+rm $cwd/bondtemp.csv
+
+if [[ $dyesorno =~ "y" ]]
+then
+paste -d, <(cut -f1 $cwd/pca-bondINFO.csv) <(cut -f1 $cwd/temp-poc-pcaINFO.csv) <(cut -f1 $cwd/temp-dihedral-pcaINFO.csv) <(cut -f1 $cwd/$calctype.csv) >> $cwd/pcaINFO-resFLARE.csv
+else
+paste -d, <(cut -f1 $cwd/pca-bondINFO.csv) <(cut -f1 $cwd/temp-poc-pcaINFO.csv) <(cut -f1 $cwd/$calctype.csv) >> $cwd/pcaINFO-resFLARE.csv
+fi
+
+rm $cwd/pca-bondINFO.csv
+rm $cwd/temp-poc-pcaINFO.csv
+rm $cwd/temp-dihedral-pcaINFO.csv
+rm $cwd/$calctype.csv
+
+#following script is used for
+#extracting the potential energies from log.lammps file
+
+cp $cwd/pcaINFO-resFLARE.csv $cwd/pcaINFO-resFLARE-cp.csv
+sed -i '1d' $cwd/pcaINFO-resFLARE-cp.csv
+
+vlines="$(grep -c "" $cwd/pcaINFO-resFLARE-cp.csv)"
+vlines=$((vlines-1))
+#jump=10
+
+stepgapone="$(grep -n "PotEng"  $owd/log.lammps | head -1 | cut -f1 -d:)"
+stepgaptwo="$(grep -n "Loop time of"  $owd/log.lammps | head -1 | cut -f1 -d:)"
+stepgap=$((stepgaptwo-stepgapone))
+grep -A $((stepgap)) "PotEng" $owd/log.lammps | head -$((stepgap)) > $cwd/energyINFO.txt
+
+cp $cwd/energyINFO.txt $cwd/energyINFO-cp.txt
+sed -i '1d' $cwd/energyINFO-cp.txt
+
+if [[ $zstep =~ "y" ]]
+then
+ for (( v=0; v<=$((vlines+1)); v++ ));
+ do
+   energyone="$(grep -m1 "" $cwd/energyINFO-cp.txt)"
+   echo $energyone >> $cwd/newEnergy
+   sed -i 1,$((jump))d $cwd/energyINFO-cp.txt
+ done
+ sed -i '1d' $cwd/newEnergy
+else
+ for (( v=0; v<=$((vlines)); v++ ));
+ do
+   energyone="$(grep -m1 "" $cwd/energyINFO-cp.txt)"
+   echo $energyone >> $cwd/newEnergy
+   sed -i 1,$((jump))d $cwd/energyINFO-cp.txt
+ done
+fi
+
+rm $cwd/energyINFO-cp.txt
+awk '{print $3}' $cwd/newEnergy > $cwd/pot-energy.csv
+rm $cwd/newEnergy
+
+#writing a Python script to get
+#Principal component analysis, or PCA graphs
+
+echo "import matplotlib.pyplot as plt"  >> $cwd/resFLARE_PCA_plots.py
+echo "import csv" >> $cwd/resFLARE_PCA_plots.py
+echo "import numpy as np" >> $cwd/resFLARE_PCA_plots.py
+echo "import pandas as pd"  >> $cwd/resFLARE_PCA_plots.py
+echo "from sklearn.preprocessing import StandardScaler"  >> $cwd/resFLARE_PCA_plots.py
+echo "from sklearn.decomposition import PCA"  >> $cwd/resFLARE_PCA_plots.py
+echo ""  >> $cwd/resFLARE_PCA_plots.py
+
+echo "energy=[]"  >> $cwd/resFLARE_PCA_plots.py
+echo "pcone = []"  >> $cwd/resFLARE_PCA_plots.py
+echo "pctwo = []"  >> $cwd/resFLARE_PCA_plots.py
+echo "with open('pot-energy.csv', 'r') as datafile:"  >> $cwd/resFLARE_PCA_plots.py
+echo "    plotting = csv.reader(datafile, delimiter=',')"  >> $cwd/resFLARE_PCA_plots.py
+echo "    for rows in plotting:"  >> $cwd/resFLARE_PCA_plots.py
+echo "        energy.append(float(rows[0]))"  >> $cwd/resFLARE_PCA_plots.py
+echo ""  >> $cwd/resFLARE_PCA_plots.py
+
+echo "filename=\"pcaINFO-resFLARE-cp.csv\""  >> $cwd/resFLARE_PCA_plots.py
+echo ""  >> $cwd/resFLARE_PCA_plots.py
+
+printf "df= pd.read_csv(filename, names=["  >> $cwd/resFLARE_PCA_plots.py
+for (( i=1; i<=$((nbonds)); i++ ));
+do
+  printf "'Min. bond length (Å) (${bond_types[$((i-1))]})','Max. bond length (Å) (${bond_types[$((i-1))]})','Mean bond length (Å) (${bond_types[$((i-1))]})','Pop. std. dev. (${bond_types[$((i-1))]})','Std. error (${bond_types[$((i-1))]})'," >> $cwd/resFLARE_PCA_plots.py
+done
+if [[ $dyesorno =~ "y" ]]
+then
+printf "'POC for 0','POC for 1','POC for 2','POC for 3','POC for 4','POC for 5','POC for 6','POC for 7','POC for 8','POC for 9','POC for 10','POC for 11','POC for 12','POC for 13','POC for 14','POC for 15','0°-20°','20°-40°','40°-60°','60°-80°','80°-100°','100°-120°','120°-140°','140°-160°','160°-180°','target'" >> $cwd/resFLARE_PCA_plots.py
+else
+printf "'POC for 0','POC for 1','POC for 2','POC for 3','POC for 4','POC for 5','POC for 6','POC for 7','POC for 8','POC for 9','POC for 10','POC for 11','POC for 12','POC for 13','POC for 14','POC for 15','target'" >> $cwd/resFLARE_PCA_plots.py
+fi
+printf "])\n" >> $cwd/resFLARE_PCA_plots.py
+echo ""  >> $cwd/resFLARE_PCA_plots.py
+
+printf "features = ["  >> $cwd/resFLARE_PCA_plots.py
+for (( i=1; i<=$((nbonds)); i++ ));
+do
+  printf "'Min. bond length (Å) (${bond_types[$((i-1))]})','Max. bond length (Å) (${bond_types[$((i-1))]})','Mean bond length (Å) (${bond_types[$((i-1))]})','Pop. std. dev. (${bond_types[$((i-1))]})','Std. error (${bond_types[$((i-1))]})'," >> $cwd/resFLARE_PCA_plots.py
+done
+if [[ $dyesorno =~ "y" ]]
+then
+printf "'POC for 0','POC for 1','POC for 2','POC for 3','POC for 4','POC for 5','POC for 6','POC for 7','POC for 8','POC for 9','POC for 10','POC for 11','POC for 12','POC for 13','POC for 14','POC for 15','0°-20°','20°-40°','40°-60°','60°-80°','80°-100°','100°-120°','120°-140°','140°-160°','160°-180°'" >> $cwd/resFLARE_PCA_plots.py
+else
+printf "'POC for 0','POC for 1','POC for 2','POC for 3','POC for 4','POC for 5','POC for 6','POC for 7','POC for 8','POC for 9','POC for 10','POC for 11','POC for 12','POC for 13','POC for 14','POC for 15'" >> $cwd/resFLARE_PCA_plots.py
+fi
+printf "]\n" >> $cwd/resFLARE_PCA_plots.py
+echo ""  >> $cwd/resFLARE_PCA_plots.py
+
+echo "x = df.loc[:, features].values"  >> $cwd/resFLARE_PCA_plots.py
+echo "y = df.loc[:,['target']].values"  >> $cwd/resFLARE_PCA_plots.py
+echo "x = StandardScaler().fit_transform(x)"  >> $cwd/resFLARE_PCA_plots.py
+echo "pca = PCA(n_components=2)"  >> $cwd/resFLARE_PCA_plots.py
+echo "principalComponents = pca.fit_transform(x)"  >> $cwd/resFLARE_PCA_plots.py
+echo ""  >> $cwd/resFLARE_PCA_plots.py
+
+echo "for i in range(0, $((loops))):"  >> $cwd/resFLARE_PCA_plots.py
+echo "    pcone.append(principalComponents[i,0])"  >> $cwd/resFLARE_PCA_plots.py
+echo "    pctwo.append(principalComponents[i,1])"  >> $cwd/resFLARE_PCA_plots.py
+echo ""  >> $cwd/resFLARE_PCA_plots.py
+
+echo "principalDf = pd.DataFrame(data = principalComponents, columns = ['PC1', 'PC2'])"  >> $cwd/resFLARE_PCA_plots.py
+echo "finalDf = pd.concat([principalDf, df[['target']]], axis = 1)"  >> $cwd/resFLARE_PCA_plots.py
+echo ""  >> $cwd/resFLARE_PCA_plots.py
+
+echo "#for 2D plots"  >> $cwd/resFLARE_PCA_plots.py
+echo "fig = plt.figure(figsize = (8,8))" >> $cwd/resFLARE_PCA_plots.py
+echo "ax = plt.axes()" >> $cwd/resFLARE_PCA_plots.py
+echo "ax.set_xlabel('\$CP_{1}\$', fontsize=12)" >> $cwd/resFLARE_PCA_plots.py
+echo "ax.set_ylabel('\$CP_{2}\$', fontsize=12)" >> $cwd/resFLARE_PCA_plots.py
+echo "ax.set_xlim(-11, 16)" >> $cwd/resFLARE_PCA_plots.py
+echo "ax.set_ylim(-6, 10)" >> $cwd/resFLARE_PCA_plots.py
+echo "plt.yticks(fontsize=12)" >> $cwd/resFLARE_PCA_plots.py
+echo "plt.xticks(fontsize=12)" >> $cwd/resFLARE_PCA_plots.py
+echo "plt.title('2D Principal component analysis')" >> $cwd/resFLARE_PCA_plots.py
+echo "ax.scatter(pcone,pctwo,alpha=0.8)" >> $cwd/resFLARE_PCA_plots.py
+echo "#plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.20), ncol=4)" >> $cwd/resFLARE_PCA_plots.py
+echo "plt.savefig('principal-component-analysis-2D.png',dpi=900,bbox_inches=\"tight\")" >> $cwd/resFLARE_PCA_plots.py
+echo "plt.cla()" >> $cwd/resFLARE_PCA_plots.py
+echo "" >> $cwd/resFLARE_PCA_plots.py
+
+echo "#for 3D plots"  >> $cwd/resFLARE_PCA_plots.py
+echo "fig = plt.figure(figsize = (12,12))" >> $cwd/resFLARE_PCA_plots.py
+echo "ax = plt.axes(projection='3d')" >> $cwd/resFLARE_PCA_plots.py
+echo "ax.set_xlabel('\$CP_{1}\$', fontsize=12)" >> $cwd/resFLARE_PCA_plots.py
+echo "ax.set_ylabel('\$CP_{2}\$', fontsize=12)" >> $cwd/resFLARE_PCA_plots.py
+echo "ax.set_zlabel('\$E_{pot}\$', fontsize=12)" >> $cwd/resFLARE_PCA_plots.py
+echo "ax.set_xlim3d(-11, 16)" >> $cwd/resFLARE_PCA_plots.py
+echo "ax.set_ylim3d(-6, 10)" >> $cwd/resFLARE_PCA_plots.py
+echo "#ax.set_zlim3d(-100, 100)" >> $cwd/resFLARE_PCA_plots.py
+echo "plt.yticks(fontsize=12)" >> $cwd/resFLARE_PCA_plots.py
+echo "plt.xticks(fontsize=12)" >> $cwd/resFLARE_PCA_plots.py
+echo "plt.title('3D Principal component analysis')" >> $cwd/resFLARE_PCA_plots.py
+echo "plt.ticklabel_format(style='sci')" >> $cwd/resFLARE_PCA_plots.py
+echo "ax.scatter(pcone,pctwo,energy,alpha=0.8)" >> $cwd/resFLARE_PCA_plots.py
+echo "#plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.20), ncol=4)" >> $cwd/resFLARE_PCA_plots.py
+echo "plt.savefig('principal-component-analysis-3D.png',dpi=900,transparent=True)" >> $cwd/resFLARE_PCA_plots.py
+echo "plt.cla()" >> $cwd/resFLARE_PCA_plots.py
+echo "" >> $cwd/resFLARE_PCA_plots.py
+
+echo "#following script can be used if there are more than one target" >> $cwd/resFLARE_PCA_plots.py
+echo "#fig = plt.figure(figsize = (8,8))" >> $cwd/resFLARE_PCA_plots.py
+echo "#plt.yticks(fontsize=20)" >> $cwd/resFLARE_PCA_plots.py
+echo "#plt.xlabel('PC1',fontsize=20)" >> $cwd/resFLARE_PCA_plots.py
+echo "#plt.ylabel('PC2',fontsize=20)" >> $cwd/resFLARE_PCA_plots.py
+echo "#plt.title(\"Principal Component Analysis (PCA)\",fontsize=20)" >> $cwd/resFLARE_PCA_plots.py
+echo "#targets = ['MD','MC']" >> $cwd/resFLARE_PCA_plots.py
+echo "#colors = ['r', 'g']" >> $cwd/resFLARE_PCA_plots.py
+echo "#for target, color in zip(targets,colors):" >> $cwd/resFLARE_PCA_plots.py
+echo "#    indicesToKeep = finalDf['target'] == target" >> $cwd/resFLARE_PCA_plots.py
+echo "#    plt.scatter(finalDf.loc[indicesToKeep, 'PC1']" >> $cwd/resFLARE_PCA_plots.py
+echo "#               , finalDf.loc[indicesToKeep, 'PC2'], alpha=0.5)" >> $cwd/resFLARE_PCA_plots.py
+echo "#plt.legend(targets,prop={'size': 20})" >> $cwd/resFLARE_PCA_plots.py
+echo "#plt.savefig('PCA.png',dpi=900,bbox_inches=\"tight\")" >> $cwd/resFLARE_PCA_plots.py
+echo ""  >> $cwd/resFLARE_PCA_plots.py
+
+python3 $cwd/resFLARE_PCA_plots.py
+
+mkdir $cwd/pcaINFO-$mol_name
+mv $cwd/resFLARE_PCA_plots.py $cwd/pcaINFO-$mol_name/
+mv $cwd/principal-component-analysis-2D.png $cwd/pcaINFO-$mol_name/
+mv $cwd/principal-component-analysis-3D.png $cwd/pcaINFO-$mol_name/
+mv $cwd/pot-energy.csv $cwd/pcaINFO-$mol_name/
+mv $cwd/pcaINFO-resFLARE.csv $cwd/pcaINFO-$mol_name/
+mv $cwd/energyINFO.txt $cwd/pcaINFO-$mol_name/
+rm pcaINFO-resFLARE-cp.csv
+rm $cwd/time.csv
+
+cd ../
